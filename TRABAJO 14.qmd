@@ -1,0 +1,372 @@
+---
+title: "TRABAJO 14"
+format: html
+editor: visual
+---
+
+## GRUPO 10
+
+### Instalar (si es necesario)
+
+```{r}
+install.packages("mice")
+install.packages("ggmice")
+```
+
+### Cargar paquetes
+
+```{r}
+library(mice)
+library(tidyverse)
+library(here)
+library(rio)
+library(ggmice)
+library(gtsummary)
+```
+
+## 1 Datos perdidos en investigación en salud
+
+Es común encontrar datos faltantes en un conjunto de datos clínicos. Por ejemplo, en el contexto del cáncer de tiroides, algunas variables relevantes como la respuesta al tratamiento o la estadificación TNM pueden estar ausentes debido a registros incompletos, evaluaciones clínicas pendientes o errores de transcripción en las historias clínicas.
+
+Cuando se aplican métodos estadísticos como regresiones o modelos predictivos, una práctica común es eliminar las observaciones con datos faltantes. Este enfoque se conoce como análisis de casos completos, y es el predeterminado en muchos paquetes estadísticos. Sin embargo, esta práctica puede reducir el tamaño muestral efectivo y sesgar los resultados.
+
+## 2 Imputación de datos
+
+Para obtener resultados más robustos y representativos, es preferible utilizar todas las observaciones disponibles. Una técnica efectiva para abordar este problema es la imputación, que consiste en reemplazar los valores faltantes con estimaciones basadas en la información disponible.
+
+Entre los métodos modernos destaca la imputación múltiple una técnica que genera varios conjuntos de datos completos simulando distintos escenarios plausibles para los datos faltantes. Esta técnica mejora la validez de las inferencias estadísticas, preservando la incertidumbre asociada a la ausencia de datos reales.
+
+En esta sesión, aplicaremos esta técnica a nuestra base de datos de pacientes con cáncer de tiroides, simulando valores faltantes de forma controlada para ilustrar el uso del paquete mice en R.
+
+## 3 El dataset para este ejercicio
+
+Este dataset incluye información de 383 pacientes diagnosticados con carcinoma diferenciado de tiroides. Las variables registradas comprenden la edad del paciente (en años), el género (femenino o masculino), el hábito de fumar y sus antecedentes, el historial de radioterapia, el estado funcional de la glándula tiroides, hallazgos del examen físico (como tipo de bocio o presencia de adenopatías), y la clasificación clínica y patológica (focalidad, riesgo, estadios TNM, etapa clínica, respuesta al tratamiento y recurrencia), entre otras.
+
+Cargando los datos
+
+```{r}
+tiroides <- import(here("data", "tiroides.csv"))
+```
+
+Un vistazo a los datos
+
+```{r}
+head(tiroides)
+```
+
+## 4 Realizando la imputación de datos
+
+### 4.1 ¿Donde estan los valores perdidos?
+
+Es importante saber en qué variables se encuentran los datos antes de iniciar la imputación. Una forma rápida es usando la función colSums() e is.na().
+
+```{r}
+colSums(is.na(tiroides))
+```
+
+En este caso, como el dataset original no presenta valores faltantes, simularemos algunas ausencias de forma aleatoria para ilustrar la aplicación del algoritmo de imputación múltiple.
+
+```{r}
+set.seed(123)  # Para reproducibilidad
+
+# Simular NA en algunas variables
+tiroides$Edad[sample(1:nrow(tiroides), 20)] <- NA
+tiroides$Funcion_Tiroidea[sample(1:nrow(tiroides), 15)] <- NA
+tiroides$Fumador[sample(1:nrow(tiroides), 10)] <- NA
+tiroides$Respuesta[sample(1:nrow(tiroides), 12)] <- NA
+```
+
+Incluso mejor, podemos visualizar los datos perdidos en un mapa de calor usando la función `plot_pattern()` del paquete `ggmice`.
+
+```{r}
+tiroides %>% 
+  select(
+    Edad,
+    Genero,
+    Fumador,
+    Historia_Fumador,
+    Historia_Radioterapia,
+    Funcion_Tiroidea,
+    Examen_Fisico,
+    Adenopatias,
+    Patologia,
+    Focalidad,
+    Riesgo,
+    T, N, M,
+    Etapa,
+    Respuesta,
+    Recurrencia
+  ) %>%
+  ggmice::plot_pattern(
+    square = TRUE,
+    rotate = TRUE
+  )
+```
+
+El número total de valores perdidos en el dataset tiroides es de 57. Las variables Edad, Funcion_Tiroidea, Fumador y Respuesta tienen 20, 15, 10 y 12 valores perdidos, respectivamente.
+
+Al analizar el patrón de ausencia mediante la función plot_pattern() del paquete ggmice, se observa que la mayoría de los pacientes tienen el registro completo, pero también hay una proporción considerable de casos con valores faltantes en una o más variables.
+
+En particular, algunas observaciones presentan datos perdidos en combinaciones específicas como Edad y Funcion_Tiroidea, o Fumador y Respuesta, lo cual indica que la ausencia de información no se concentra en una única dimensión del perfil clínico del paciente.
+
+### 4.2 Comparación de participantes con y sin valores perdidos
+
+Una buena práctica antes de iniciar la imputación de datos es también evaluar cómo difieren los valores de las otras variables entre el grupo de participantes con valores perdidos y el grupo sin valores perdidos. Esto es importante debido a que puede darnos pistas de si en realidad es necesaria la imputación o, dicho de otra forma, si es seguro usar el análisis de casos completos. ¿Cómo? si la distribución de las otras variables no difiere entre el grupo con valores perdidos y el grupo sin valores perdidos, entonces no es necesario la imputación de datos. Evaluemos esto en nuestro dataset para la variable `edad` e Funcion tiroidea
+
+```{r}
+
+tabla_edad <- tiroides %>%
+  select(
+    Genero,
+    Fumador,
+    Riesgo,
+    Respuesta,
+    Edad
+  ) %>%
+  mutate(missing = factor(
+    is.na(Edad),
+    levels = c(FALSE, TRUE),
+    labels = c("Sin valores perdidos", "Con valores perdidos")
+  )) %>%
+  tbl_summary(
+    by = missing,
+    statistic = list(
+      all_continuous() ~ "{mean} ({sd})",
+      all_categorical() ~ "{n} ({p}%)"
+    )
+  ) %>%
+  modify_header(label = "**Variable**") %>%
+  modify_caption("Características según valor perdido en **Edad**") %>%
+  bold_labels()
+
+
+tabla_funcion <- tiroides %>%
+  select(
+    Genero,
+    Historia_Radioterapia,
+    Focalidad,
+    Respuesta,
+    Funcion_Tiroidea
+  ) %>%
+  mutate(missing = factor(
+    is.na(Funcion_Tiroidea),
+    levels = c(FALSE, TRUE),
+    labels = c("Sin valores perdidos", "Con valores perdidos")
+  )) %>%
+  tbl_summary(
+    by = missing,
+    statistic = list(
+      all_continuous() ~ "{mean} ({sd})",
+      all_categorical() ~ "{n} ({p}%)"
+    )
+  ) %>%
+  modify_header(label = "**Variable**") %>%
+  modify_caption("Características según valor perdido en **Funcion tiroidea**") %>%
+  bold_labels()
+
+
+
+tabla_comparada <- tbl_merge(
+  tbls = list(tabla_edad, tabla_funcion),
+  tab_spanner = c("**Edad**", "**Funcion tiroidea**")
+)
+
+```
+
+```{r}
+tabla_comparada
+```
+
+En el caso de la variable Edad, se identificaron 20 pacientes que no tienen registrada esta información. Dentro de este grupo, el 60 por ciento son mujeres y el 40 por ciento son hombres, mientras que en el grupo con edad registrada, el 83 por ciento son mujeres y solo el 17 por ciento son hombres. También se observó una mayor proporción de fumadores entre quienes no tienen registrada su edad, alcanzando un 30 por ciento frente al 12 por ciento del grupo con datos completos. El riesgo tumoral alto fue más frecuente en el grupo con edad faltante, con un 20 por ciento, en comparación con solo un 7.7 por ciento en el grupo completo. Además, este grupo presentó una mayor proporción de respuesta incompleta estructural, con un 50 por ciento frente al 22 por ciento de los pacientes con edad conocida.
+
+En cuanto a la variable Función Tiroidea, se encontraron 15 pacientes con valores faltantes. Todos los pacientes en este grupo son mujeres. Si bien las características clínicas son similares al grupo con datos completos, destaca que no se registraron pacientes masculinos ni fumadores en este subconjunto. La mayoría de ellos presentó enfermedad unifocal, alcanzando un 80 por ciento.
+
+### 4.3 ¿Qué variables debo incluir en el proceso de imputación?
+
+Debemos incluir todas las variables que se utilizarán en los análisis posteriores, incluso aquellas que no presentan valores perdidos. La razón es que el modelo de imputación debe ser tan completo como el análisis que se realizará posteriormente. De lo contrario, se perdería información relevante que puede ayudar a predecir los valores faltantes de otras variables.
+
+Además, aunque algunas variables no tengan datos faltantes, su inclusión en el modelo de imputación es útil porque aportan información útil que mejora la calidad de la imputación. Es importante asegurarse también de que las variables categóricas estén definidas como factores antes de realizar el procedimiento.
+
+```{r}
+input_data <- tiroides %>%
+  select(
+    Edad,
+    Genero,
+    Fumador,
+    Focalidad,
+    Respuesta,
+    Recurrencia  # Asegúrate de incluirla
+  ) %>%
+  mutate(
+    Genero = as.factor(Genero),
+    Fumador = as.factor(Fumador),
+    Focalidad = as.factor(Focalidad),
+    Respuesta = as.factor(Respuesta),
+    Recurrencia = as.factor(Recurrencia)  # Muy importante si es binaria
+  )
+```
+
+### 4.4 La función `mice()` para imputar datos
+
+Para imputar datos utilizaremos la función mice() del paquete del mismo nombre. Entre sus argumentos, debemos especificar:
+
+-   el número de imputaciones con m,
+-   una semilla (seed) para que los resultados sean reproducibles, y
+-   el método de imputación con method.
+
+Con respecto a este último argumento, emplearemos el método "pmm" para variables continuas y "logreg" para variables binarias. Para las variables que no presentan valores perdidos, simplemente se colocan comillas vacías ("").
+
+Cabe recordar que nuestro conjunto de datos input_data contiene 9 variables, de las cuales 4 presentan valores faltantes (Edad, Funcion_Tiroidea, Fumador y Respuesta). A continuación se muestra el orden de las variables y los métodos que aplicaremos:
+
+```{r}
+names(input_data)
+```
+
+El método de imputación la indicaremos con el argumento `method` en el mismo orden que aparecen las variables en el dataset.
+
+```{r}
+data_imputada <- mice(
+  input_data,
+  m = 20,
+  method = c(
+    "pmm",       
+    "",      
+    "logreg",   
+    "",          
+    "",          
+    "polyreg",   
+    "",          
+    "",          
+    "polyreg"    
+  ),
+  maxit = 20,
+  seed = 3,
+  print = FALSE
+)
+```
+
+```{r}
+data_imputada
+```
+
+Cada variable con datos perdidos fue tratada con una técnica distinta, según el tipo de información que representa. Por ejemplo, la variable Edad se completó usando un método adecuado para números, llamado "pmm", mientras que Fumador, al ser una variable con respuestas tipo sí o no, usó una regresión logística. Para las variables con varias categorías como Funcion_Tiroidea y Respuesta, se aplicó un modelo más flexible llamado "polyreg", que funciona bien con opciones múltiples.
+
+Además, el modelo usó otras variables del dataset para ayudar a predecir los valores faltantes. Por ejemplo, para estimar los datos ausentes de Edad, se tomó en cuenta toda la información disponible de otras variables como género, antecedentes, riesgo y respuesta. Lo mismo ocurrió con Fumador, donde se utilizó casi toda la información clínica para hacer una mejor estimación.
+
+## 5 Analizando los datos imputados
+
+Antes de realizar análisis adicionales con el dataset imputado, es importante revisar cómo quedaron los valores imputados. Idealmente, estos nuevos valores deberían tener una distribución parecida a la de los datos originales. Si se ven muy distintos, podría ser una señal de que el modelo de imputación no fue adecuado.
+
+Para la variable Edad
+
+```{r}
+ggmice(data_imputada, aes(x = .imp, y = Edad)) +
+  geom_jitter(height = 0, width = 0.25) +
+  geom_boxplot(width = 0.5, size = 1, alpha = 0.55, outlier.shape = NA) +
+  labs(x = "Número de imputación")
+```
+
+El gráfico muestra la distribución de la variable Edad antes y después de aplicar el proceso de imputación múltiple. A la izquierda, el grupo marcado con el número 0 representa los datos originales observados (en azul). A partir del número 1 en adelante se encuentran las 20 imputaciones generadas (en rosado).
+
+Las cajas y los puntos permiten visualizar que las edades imputadas siguen un patrón similar al de los datos originales. No se observan valores extremos fuera de rango, y las medianas, rangos y dispersión de los datos imputados son coherentes con la información real.
+
+Esto indica que los valores imputados para la edad son consistentes con el comportamiento general de la variable, y por lo tanto, pueden considerarse plausibles para ser usados en análisis posteriores.
+
+Para la variable Respuesta
+
+```{r}
+ggmice(data_imputada, aes(x = .imp, y = as.numeric(Respuesta))) +
+  geom_jitter(height = 0.1, width = 0.25, alpha = 0.4) +
+  geom_boxplot(width = 0.5, size = 1, alpha = 0.55, outlier.shape = NA) +
+  labs(x = "Número de imputación", y = "Respuesta (codificada)")
+```
+
+El gráfico presenta la distribución de la variable Respuesta antes y después de la imputación múltiple. A la izquierda (grupo 0) se encuentran los datos originales observados, representados en azul. A partir del grupo 1 en adelante, se visualizan las 20 versiones imputadas, mostradas en color rosado.
+
+La variable Respuesta es categórica y fue convertida a valores numéricos para facilitar su representación gráfica. En el eje vertical, cada valor numérico corresponde a una categoría clínica (por ejemplo: excelente, incompleto bioquímico, estructural, indeterminado).
+
+Al observar el gráfico, se nota que las imputaciones mantienen una distribución similar a los datos reales. Las categorías más frecuentes están bien representadas en las imputaciones, sin concentraciones excesivas en valores extremos ni distribuciones artificiales.
+
+Para variables categóricas, una forma práctica de evaluar la calidad de la imputación es comparar cómo se distribuyen las categorías en los datos observados y en los imputados. Esto se puede hacer generando una tabla cruzada a partir de la versión "long" del conjunto de datos imputado.
+
+```{r}
+data_imputada_l <- complete(data_imputada, "long", include = TRUE)
+```
+
+Ahora la tabla.
+
+```{r}
+data_imputada_l <- data_imputada_l %>%
+  mutate(
+    imputed = .imp > 0,
+    imputed = factor(imputed, levels = c(FALSE, TRUE),
+                     labels = c("Observado", "Imputado"))
+  )
+
+prop.table(
+  table(data_imputada_l$Respuesta, data_imputada_l$imputed),
+  margin = 2
+)
+```
+
+La tabla muestra la proporción de cada categoría de la variable Respuesta en los datos observados y en los datos imputados.
+
+Los resultados son muy similares entre ambos grupos. Por ejemplo, la categoría "Excelente" representa el 53.9 % en los datos observados y 53.7 % en los imputados. Lo mismo ocurre con las demás categorías, cuyas diferencias son mínimas y se mantienen en el mismo orden.
+
+### 5.1 Procedimientos adicionales luego de la imputación
+
+Una vez que se han imputado los valores faltantes, es posible realizar análisis estadísticos utilizando el objeto imputado. Para modelos de regresión, se puede usar la función `with()` para ajustar el modelo dentro del objeto imputado (`data_imputada`) y luego aplicar `pool()` para obtener los resultados combinados de todas las imputaciones.
+
+Si usas el paquete `gtsummary`, puedes trabajar directamente sobre el objeto imputado sin necesidad de agrupar ni hacer pooling manualmente. A continuación se muestra un ejemplo de regresión logística multivariada con los datos imputados, tal como se hace habitualmente.
+
+En este ejemplo, se evalúa la asociación entre diversas características clínicas y la probabilidad de presentar **recurrencia**.
+
+```{r}
+tabla_multi <- 
+  data_imputada |> 
+  with(glm(Recurrencia ~ Edad + Genero + Fumador + Focalidad + Respuesta,
+           family = binomial(link = "logit"))) |>
+  tbl_regression(
+    exponentiate = TRUE,
+    label = list(
+      Genero = "Sexo",
+      Fumador = "Fumador",
+      Edad = "Edad (años)",
+      Focalidad = "Focalidad",
+      Respuesta = "Respuesta post-tratamiento"
+    )
+  ) |>
+  bold_p(t = 0.05) |>
+  modify_header(
+    estimate = "**OR ajustado**",
+    p.value = "**p valor**"
+  )
+```
+
+```{r}
+tabla_multi
+```
+
+El análisis evalúa qué variables clínicas se asocian con la probabilidad de recurrencia en pacientes con cáncer de tiroides. El modelo incluye Edad, Sexo, Fumador, Focalidad y Respuesta post-tratamiento como predictores.
+
+Edad, sexo y hábitos
+
+La variable Edad muestra una razón de odds (OR) de 1.03 por cada año adicional, pero no es estadísticamente significativa (p = 0.14), por lo que no se puede afirmar que tenga un efecto claro sobre la recurrencia.
+
+Los pacientes masculinos parecen tener una mayor probabilidad de recurrencia (OR = 3.72), pero este resultado tampoco es significativo (p = 0.10).
+
+El tabaquismo tampoco se asocia de manera significativa con la recurrencia (p = 0.60)
+
+Focalidad tumoral
+
+La diferencia entre focalidad multifocal y unifocal no es estadísticamente significativa (OR = 0.86, p = 0.8), lo que sugiere que esta característica no estaría relacionada con la recurrencia en este modelo.
+
+Respuesta post-tratamiento
+
+Esta es la única variable con resultados claramente significativos:
+
+Los pacientes con respuesta incompleta bioquímica tienen un OR de 144 (p \< 0.001), lo que indica una asociación muy fuerte con la recurrencia.
+
+Aquellos con respuesta incompleta estructural tienen una OR aún mayor: 7,445 (p \< 0.001), lo que refleja una relación extremadamente fuerte con la recurrencia.
+
+Incluso los pacientes con respuesta indeterminada presentan mayor riesgo de recurrencia comparados con quienes tuvieron una respuesta excelente (OR = 19.0, p = 0.008).
